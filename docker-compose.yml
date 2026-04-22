@@ -75,6 +75,21 @@ services:
       - .:/app
     command: celery -A app.tasks.celery beat --loglevel=info
 
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+
 volumes:
   postgres_data:
   mongo_data:
