@@ -39,10 +39,16 @@ class ChatService:
         self.cart_service = CartService()
         self.memory_sessions: Dict[str, ConversationBufferWindowMemory] = {}
         self.initialized = False
+        self._main_loop = None  # captured at startup; used by _run_sync
 
     async def initialize(self):
         """Initialize LangChain components"""
+        import asyncio
         try:
+            # Capture the running event loop once so _run_sync can always
+            # schedule coroutines onto it from worker threads.
+            self._main_loop = asyncio.get_running_loop()
+
             self.llm = ChatGoogleGenerativeAI(
                 model=settings.gemini_model,
                 google_api_key=settings.gemini_api_key,
@@ -63,6 +69,7 @@ class ChatService:
                 k=10,
                 return_messages=True,
                 memory_key="chat_history",
+                output_key="output",  # needed when return_intermediate_steps=True
             )
         return self.memory_sessions[session_id]
 
@@ -116,15 +123,27 @@ class ChatService:
         ]
 
     def _run_sync(self, coro, *args):
-        """Run async tool function synchronously (LangChain tools are sync)"""
+        """Run an async tool coroutine from a sync (thread-pool) context.
+
+        LangChain calls tool funcs synchronously, but those funcs are async.
+        We must NOT call loop.run_until_complete() on the already-running
+        uvicorn loop — that corrupts SQLAlchemy's async connection pool.
+        Instead, schedule the coroutine onto the main loop from this thread.
+        """
         import asyncio
 
+        if self._main_loop and self._main_loop.is_running():
+            # We're in a worker thread; dispatch to the main event loop.
+            future = asyncio.run_coroutine_threadsafe(coro(*args), self._main_loop)
+            return future.result(timeout=60)
+
+        # Fallback: no main loop captured yet (shouldn't happen in production).
+        import asyncio as _asyncio
+        loop = _asyncio.new_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        return loop.run_until_complete(coro(*args))
+            return loop.run_until_complete(coro(*args))
+        finally:
+            loop.close()
 
     async def _search_products_tool(self, query: str) -> str:
         try:
@@ -404,6 +423,7 @@ class ChatService:
                 memory=memory,
                 verbose=True,
                 handle_parsing_errors=True,
+                return_intermediate_steps=True,
             )
 
             system_prompt = """You are a helpful AI shopping assistant for an e-commerce store.
@@ -435,32 +455,33 @@ Available tools:
 
             ai_response = result.get("output", "I'm sorry, I couldn't process that.")
 
-            # Extract product IDs from tool steps
             product_ids = []
+            logger.info(f"[Chat] intermediate_steps present: {'intermediate_steps' in result}, count: {len(result.get('intermediate_steps', []))}")
             if "intermediate_steps" in result:
+                import re
                 for step in result["intermediate_steps"]:
-                    tool_name = getattr(step[0], "tool", None)
-                    tool_output = step[1]
-                    if tool_name in (
-                        "search_products",
-                        "filter_products",
-                        "get_recommendations",
-                    ):
+                    observation = str(step[1])
+                    logger.info(f"[Chat] Scanning Observation: {observation[:200]}...")
+                    
+                    # Search for arrays of numbers in the observation string
+                    # Matches "product_ids": [1, 2, 3] or similar patterns
+                    matches = re.finditer(r'"product_ids":\s*\[(.*?)\]', observation)
+                    for match in matches:
                         try:
-                            parsed = json.loads(tool_output)
-                            product_ids.extend(parsed.get("product_ids", []))
-                        except Exception:
-                            pass
-            product_ids = list(dict.fromkeys(product_ids))
+                            # Extract and split the IDs
+                            id_list_str = match.group(1)
+                            # Handle both comma-separated and space-separated lists just in case
+                            ids = [int(i.strip()) for i in id_list_str.split(',') if i.strip().isdigit()]
+                            product_ids.extend(ids)
+                        except Exception as e:
+                            logger.error(f"[Chat] Regex parse error: {e}")
 
-            # Save AI response
-            msg_type = "product" if product_ids else "text"
-            await add_message(
-                str(conversation["_id"]),
-                "assistant",
-                ai_response,
-                {"type": msg_type, "product_ids": product_ids},
-            )
+            # Deduplicate and validate
+            unique_ids = list(set(product_ids))
+            logger.info(f"[Chat] Final unique IDs for query: {unique_ids}")
+            
+            msg_type = "product" if unique_ids else "text"
+            await add_message(str(conversation["_id"]), "assistant", ai_response, {"type": msg_type})
 
             # Update conversation state
             state = "cart" if "cart" in ai_response.lower() else "browsing"
@@ -468,20 +489,30 @@ Available tools:
 
             # Build product list for response
             products = []
-            if product_ids:
+            if unique_ids:
+                from sqlalchemy import select
+                from app.models.postgres import Product
+
                 async with async_session() as db:
-                    for pid in product_ids:
-                        p = await get_product(db, int(pid))
-                        if p:
-                            products.append(
-                                {
-                                    "id": p.id,
-                                    "name": p.name,
-                                    "price": p.price,
-                                    "image_urls": p.image_urls,
-                                    "category": p.category,
-                                }
-                            )
+                    stmt = select(Product).where(Product.id.in_(unique_ids))
+                    db_result = await db.execute(stmt)
+                    db_products = db_result.scalars().all()
+
+                    logger.info(f"[Chat] Bulk fetched {len(db_products)} products from DB")
+
+                    for p in db_products:
+                        products.append({
+                            "id": p.id,
+                            "name": p.name,
+                            "price": float(p.price),
+                            "compare_at_price": float(p.compare_at_price) if p.compare_at_price else None,
+                            "image_urls": p.image_urls,
+                            "category": p.category,
+                            "description": p.description,
+                            "sku": p.sku,
+                            "tags": p.tags,
+                            "stock_quantity": p.stock_quantity,
+                        })
 
             return {
                 "content": ai_response,
@@ -490,6 +521,7 @@ Available tools:
                 "products": products,
                 "type": msg_type,
             }
+
 
         except Exception as e:
             logger.error(f"Error processing message: {e}")
