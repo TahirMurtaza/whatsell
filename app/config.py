@@ -27,7 +27,7 @@ class Settings(BaseSettings):
 
     # Google Gemini
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-1.5-flash"
 
     # Celery
     celery_broker_url: str = "redis://redis:6379/1"
