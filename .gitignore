@@ -11,3 +11,12 @@ venv/
 .DS_Store
 # Added by code-review-graph
 .code-review-graph/
+
+# Celery
+celerybeat-schedule
+
+# Tool configs
+.claude/
+.mcp.json
+CLAUDE.md
+frontend/CLAUDE.md
