@@ -33,9 +33,15 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://redis:6379/1"
     celery_result_backend: str = "redis://redis:6379/2"
 
-    # WhatsApp
-    whatsapp_verify_token: str = ""
-    whatsapp_access_token: str = ""
+    # WASenderAPI (WhatsApp)
+    wasender_api_key: str = ""          # Personal Access Token from wasenderapi.com
+    wasender_webhook_secret: str = ""   # Webhook secret for X-Webhook-Signature verification
+    wasender_base_url: str = "https://api.wasenderapi.com"
+
+    # Twilio (legacy — kept for backward compat, not used)
+    twilio_sid: str = ""
+    twilio_token: str = ""
+    phone_number: str = ""
 
     @property
     def postgres_url(self) -> str:

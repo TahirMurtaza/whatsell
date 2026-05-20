@@ -72,3 +72,36 @@ class Order(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     customer = relationship("Customer", back_populates="orders")
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Base Models
+# ---------------------------------------------------------------------------
+
+
+class Document(Base):
+    __tablename__ = "documents"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), nullable=True, index=True)  # None = global
+    filename = Column(String(500), nullable=False)
+    content_type = Column(String(200), nullable=True)
+    status = Column(String(20), default="pending")  # pending | processing | ready | error
+    error_msg = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    chunks = relationship(
+        "DocumentChunk", back_populates="document", cascade="all, delete-orphan"
+    )
+
+
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+    chunk_index = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    embedding = Column(Vector(3072), nullable=True)  # gemini-embedding-001 → 3072 dims
+
+    document = relationship("Document", back_populates="chunks")
