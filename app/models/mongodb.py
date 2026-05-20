@@ -49,14 +49,24 @@ async def update_conversation_state(
 async def add_message(
     conversation_id: str, role: str, content: str, metadata: dict | None = None
 ) -> dict:
+    now = datetime.utcnow()
     message = {
         "conversation_id": conversation_id,
         "role": role,
         "content": content,
         "metadata": metadata or {},
-        "timestamp": datetime.utcnow(),
+        "timestamp": now,
     }
     await db.messages.insert_one(message)
+    # Keep the conversation's updated_at current so time-range filters work
+    try:
+        from bson import ObjectId
+        await db.conversations.update_one(
+            {"_id": ObjectId(conversation_id)},
+            {"$set": {"updated_at": now}},
+        )
+    except Exception:
+        pass  # Non-critical — don't break message saves
     return message
 
 

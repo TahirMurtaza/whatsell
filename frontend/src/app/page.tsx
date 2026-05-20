@@ -2,7 +2,8 @@
 
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useChat } from 'ai/react';
-import { Send, ShoppingBag, Sparkles } from 'lucide-react';
+import { Send, ShoppingBag, Sparkles, BookOpen, LayoutDashboard, ScrollText } from 'lucide-react';
+import Link from 'next/link';
 import MessageItem from '@/components/MessageItem';
 
 const QUICK_REPLIES = [
@@ -30,17 +31,36 @@ export default function ChatPage() {
   // Live cart item count
   const [cartCount, setCartCount] = React.useState(0);
 
+  // KB session ID from localStorage (set by /kb page)
+  const [kbSessionId, setKbSessionId] = React.useState<string | null>(null);
+
+  // Stable web session ID — persists for the browser tab (sessionStorage),
+  // so each new tab/window starts a fresh conversation in the logs.
+  const [webSessionId, setWebSessionId] = React.useState<string>('default_session');
+
+  React.useEffect(() => {
+    setKbSessionId(localStorage.getItem('kb_session_id'));
+
+    // Reuse existing tab session or generate a new one
+    let sid = sessionStorage.getItem('whatsell_session_id');
+    if (!sid) {
+      sid = 'web_' + Math.random().toString(36).slice(2, 10) + '_' + Date.now().toString(36);
+      sessionStorage.setItem('whatsell_session_id', sid);
+    }
+    setWebSessionId(sid);
+  }, []);
+
   // Derive sessionId from the first assistant message annotation that carries it
   const sessionId =
     messages
       .flatMap((m) => (m.annotations as any[]) ?? [])
-      .find((a) => a?.sessionId)?.sessionId ?? 'default_session';
+      .find((a) => a?.sessionId)?.sessionId ?? webSessionId;
 
   // Fetch live cart count
   const refreshCartCount = useCallback(async () => {
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    if (!sessionId || sessionId === 'default_session') return;
     try {
-      const res = await fetch(`${baseUrl}/api/v1/chat/${sessionId}/cart`);
+      const res = await fetch(`/api/cart/${sessionId}`);
       if (res.ok) {
         const cart = await res.json();
         setCartCount(cart.item_count ?? 0);
@@ -57,9 +77,8 @@ export default function ChatPage() {
   // Add to cart handler — called by ProductCard via MessageItem
   const handleAddToCart = useCallback(
     async (product: any) => {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       try {
-        const res = await fetch(`${baseUrl}/api/v1/chat/${sessionId}/cart`, {
+        const res = await fetch(`/api/cart/${sessionId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action: 'add', product_id: product.id, quantity: 1 }),
@@ -89,9 +108,20 @@ export default function ChatPage() {
           </div>
           <h1>WhatSell <span className="gradient-text">AI</span></h1>
         </div>
-        <div className="cart-status">
-          <ShoppingBag size={20} />
-          {cartCount > 0 && <span className="badge">{cartCount}</span>}
+        <div className="header-actions">
+          <Link href="/admin" className="kb-link" title="Admin Dashboard">
+            <LayoutDashboard size={20} />
+          </Link>
+          <Link href="/logs" className="kb-link" title="Session Logs">
+            <ScrollText size={20} />
+          </Link>
+          <Link href="/kb" className="kb-link" title="Knowledge Base">
+            <BookOpen size={20} />
+          </Link>
+          <div className="cart-status">
+            <ShoppingBag size={20} />
+            {cartCount > 0 && <span className="badge">{cartCount}</span>}
+          </div>
         </div>
       </header>
 
@@ -123,7 +153,7 @@ export default function ChatPage() {
 
       {/* Input Area */}
       <footer className="input-footer">
-        <form onSubmit={handleSubmit} className="input-form glass premium-shadow">
+        <form onSubmit={(e) => handleSubmit(e, { data: { kbSessionId, sessionId: webSessionId } } as any)} className="input-form glass premium-shadow">
           <input
             value={input}
             onChange={handleInputChange}
@@ -180,6 +210,20 @@ export default function ChatPage() {
           font-size: 20px;
           font-weight: 700;
           letter-spacing: -0.02em;
+        }
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 16px;
+        }
+        :global(.kb-link) {
+          color: rgba(255,255,255,0.55);
+          display: flex;
+          align-items: center;
+          transition: color 0.2s;
+        }
+        :global(.kb-link:hover) {
+          color: var(--accent);
         }
         .cart-status {
           position: relative;

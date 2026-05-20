@@ -16,6 +16,7 @@ async def send_message(payload: ChatMessage):
         user_message=payload.message,
         customer_phone=payload.customer_phone,
         source=payload.source,
+        kb_session_id=payload.kb_session_id,
     )
     return ChatResponse(
         reply=result["content"],

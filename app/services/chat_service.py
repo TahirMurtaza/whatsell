@@ -4,6 +4,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from langchain.agents import AgentType, initialize_agent
+from langchain.callbacks.base import BaseCallbackHandler
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.tools import Tool
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -28,6 +29,79 @@ from app.models.mongodb import (
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+class TokenCountCallback(BaseCallbackHandler):
+    """Accumulates token usage from every LLM call in an agent turn."""
+
+    def __init__(self):
+        super().__init__()
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self.total_tokens = 0
+
+    def on_llm_end(self, response, **kwargs):
+        try:
+            # LangChain-Google-GenAI path: generation_info carries usage_metadata
+            gen_info = response.generations[0][0].generation_info or {}
+            usage = gen_info.get("usage_metadata", {})
+            self.prompt_tokens += usage.get("prompt_token_count", 0)
+            self.completion_tokens += usage.get("candidates_token_count", 0)
+            self.total_tokens += usage.get("total_token_count", 0)
+        except Exception:
+            pass  # Never break the agent turn for observability issues
+
+
+def _infer_state(tool_calls: list, ai_response: str) -> str:
+    """
+    Determine conversation state from tool calls (most reliable) then
+    fall back to keyword matching on the assistant response text.
+
+    Priority (highest → lowest):
+      ordered   – checkout tool succeeded
+      checkout  – checkout tool called but failed, or payment-link language
+      cart      – add_to_cart / view_cart / clear_cart used, or cart language
+      browsing  – product search / filter used, or product language
+      greeting  – only if nothing else matches AND it looks like an intro
+    """
+    tools_used = {tc["tool"] for tc in tool_calls}
+    response_lower = ai_response.lower()
+
+    # 1. Ordered — checkout tool returned success
+    if "checkout" in tools_used:
+        for tc in tool_calls:
+            if tc["tool"] == "checkout":
+                try:
+                    import json as _json
+                    out = _json.loads(tc["output"])
+                    if out.get("success"):
+                        return "ordered"
+                except Exception:
+                    pass
+        # checkout was called but failed → still mark as checkout attempt
+        return "checkout"
+
+    # 2. Checkout — payment-link language in response
+    if any(kw in response_lower for kw in ("payment link", "pay here", "place your order", "confirm.*order", "order total")):
+        return "checkout"
+
+    # 3. Cart — cart tools used or clear cart language
+    if tools_used & {"add_to_cart", "view_cart", "clear_cart"}:
+        return "cart"
+    if any(kw in response_lower for kw in ("added to cart", "your cart", "in your cart", "ready to checkout", "cart total")):
+        return "cart"
+
+    # 4. Browsing — product tools used or product language
+    if tools_used & {"search_products", "filter_products", "get_product_details", "get_recommendations"}:
+        return "browsing"
+    if any(kw in response_lower for kw in ("here are", "found", "product", "price", "available", "recommend")):
+        return "browsing"
+
+    # 5. Greeting — short opener with no other signal
+    if len(ai_response) < 200 and any(kw in response_lower for kw in ("hello", "hi", "welcome", "help you", "how can i")):
+        return "greeting"
+
+    return "browsing"
 
 
 class ChatService:
@@ -73,8 +147,8 @@ class ChatService:
             )
         return self.memory_sessions[session_id]
 
-    def create_tools(self, session_id: str) -> List[Tool]:
-        return [
+    def create_tools(self, session_id: str, kb_session_id: Optional[str] = None, customer_phone: str = "") -> List[Tool]:
+        tools = [
             Tool(
                 name="search_products",
                 description="Find products using semantic search. Input: search query (str).",
@@ -113,7 +187,7 @@ class ChatService:
             Tool(
                 name="checkout",
                 description="Complete the order from cart. Input: JSON with session_id (str), customer_phone (str), shipping_address (JSON string, optional).",
-                func=lambda q: self._run_sync(self._checkout_tool, q, session_id),
+                func=lambda q: self._run_sync(self._checkout_tool, q, session_id, customer_phone),
             ),
             Tool(
                 name="get_order_status",
@@ -121,6 +195,25 @@ class ChatService:
                 func=lambda q: self._run_sync(self._order_status_tool, q),
             ),
         ]
+
+        # Wire in the knowledge-base tool only when a KB session is available
+        if kb_session_id:
+            _kb_sid = kb_session_id  # capture for closure
+            tools.append(
+                Tool(
+                    name="search_knowledge_base",
+                    description=(
+                        "Search the store's knowledge base (uploaded documents such as FAQs, "
+                        "manuals, policies, or product guides). Use this when the user asks about "
+                        "store policies, product instructions, warranties, shipping rules, or any "
+                        "topic that might be covered in uploaded documents. "
+                        "Input: plain-English search query (str)."
+                    ),
+                    func=lambda q: self._run_sync(self._search_kb_tool, q, _kb_sid),
+                )
+            )
+
+        return tools
 
     def _run_sync(self, coro, *args):
         """Run an async tool coroutine from a sync (thread-pool) context.
@@ -307,10 +400,11 @@ class ChatService:
         await self.cart_service.clear_cart(session_id)
         return "Cart cleared."
 
-    async def _checkout_tool(self, input_json: str, session_id: str) -> str:
+    async def _checkout_tool(self, input_json: str, session_id: str, session_phone: str = "") -> str:
         try:
             data = json.loads(input_json)
-            customer_phone = data.get("customer_phone", "")
+            # Use phone from agent input; fall back to the WhatsApp session phone
+            customer_phone = data.get("customer_phone", "").strip() or session_phone
             shipping_address = data.get("shipping_address")
 
             cart = await self.cart_service.get_cart(session_id)
@@ -343,6 +437,9 @@ class ChatService:
                 await db.refresh(order)
                 order_id = order.id
                 order_number = order.order_number
+                subtotal = order.subtotal
+                tax = order.tax
+                shipping = order.shipping
                 total = order.total
 
             payment = await payment_service.create_mock_payment_link(order_number, total)
@@ -351,9 +448,12 @@ class ChatService:
 
             return json.dumps(
                 {
-                    "message": f"Order {order_number} created! Total: ${total:.2f}. Pay here: {payment}",
+                    "message": f"Order {order_number} created! Pay here: {payment}",
                     "success": True,
                     "order_number": order_number,
+                    "subtotal": subtotal,
+                    "tax": tax,
+                    "shipping": shipping,
                     "total": total,
                     "payment_link": payment,
                 }
@@ -363,6 +463,23 @@ class ChatService:
         except Exception as e:
             logger.error(f"Error in checkout_tool: {e}")
             return json.dumps({"message": "Error during checkout.", "success": False})
+
+    async def _search_kb_tool(self, query: str, kb_session_id: str) -> str:
+        """Search the knowledge base for relevant chunks and return them as context."""
+        try:
+            from app.services.kb_service import search_chunks
+
+            chunks = await search_chunks(kb_session_id, query, top_k=4)
+            if not chunks:
+                return "No relevant information found in the knowledge base for that query."
+
+            parts = []
+            for i, chunk in enumerate(chunks, 1):
+                parts.append(f"[{chunk['filename']}]\n{chunk['content']}")
+            return "\n\n---\n\n".join(parts)
+        except Exception as e:
+            logger.error(f"Error in search_kb_tool: {e}", exc_info=True)
+            return "Error searching knowledge base."
 
     async def _order_status_tool(self, order_number: str) -> str:
         try:
@@ -399,6 +516,7 @@ class ChatService:
         user_message: str,
         customer_phone: str = "",
         source: str = "whatsapp",
+        kb_session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not self.initialized:
             await self.initialize()
@@ -414,7 +532,7 @@ class ChatService:
 
             # Build agent
             memory = self.get_or_create_memory(session_id)
-            tools = self.create_tools(session_id)
+            tools = self.create_tools(session_id, kb_session_id=kb_session_id, customer_phone=customer_phone)
 
             agent = initialize_agent(
                 tools=tools,
@@ -426,65 +544,127 @@ class ChatService:
                 return_intermediate_steps=True,
             )
 
-            system_prompt = """You are a helpful AI shopping assistant for an e-commerce store.
-You help customers find products, answer questions, and complete orders.
+            kb_tool_line = (
+                "- search_knowledge_base: Search uploaded store documents (FAQs, manuals, policies). "
+                "Use this for questions about warranties, returns, shipping policies, product instructions, "
+                "or anything that might be in a store document. Input: search query (str).\n"
+                if kb_session_id else ""
+            )
 
-Guidelines:
-- Be friendly, helpful, and concise
-- Use tools to search products, get details, and manage the cart
-- Always include prices and key details when recommending products
-- Ask clarifying questions if the request is unclear
-- When user says "add to cart" or "order this", use the add_to_cart tool
-- After adding to cart, show cart summary and ask if they want to checkout
-- When user says "checkout" or "place order", use the checkout tool with their phone number
-- After checkout, share the payment link and confirm the order number
+            # Format phone for display (add + prefix)
+            display_phone = f"+{customer_phone}" if customer_phone and not customer_phone.startswith("+") else customer_phone
+            phone_context = (
+                f"\nThe customer's WhatsApp number is {display_phone}. "
+                f"When they want to checkout, confirm by saying: "
+                f"\"I'll place the order using your WhatsApp number {display_phone} — is that correct?\" "
+                f"If they confirm, use {display_phone} as customer_phone in the checkout tool. "
+                f"If they say no or give a different number, use the number they provide."
+                if customer_phone else
+                "\nNo phone number is known yet. When checkout is requested, ask the customer for their phone number first."
+            )
+
+            system_prompt = f"""You are a friendly, conversational AI shopping assistant for an e-commerce store.
+You help customers find products, answer questions, and complete orders via WhatsApp.
+{phone_context}
+
+SEARCH BEHAVIOUR — follow these rules strictly:
+- When a customer mentions a product category (e.g. shoes, shirts, headphones), first search then immediately ask 1-2 clarifying questions to narrow down (e.g. "Are you looking for men's or women's?", "Any budget in mind?", "What size?", "Any preferred colour or style?").
+- Use the answers to run a more targeted search. Stay focused on the same product category until the customer explicitly changes it.
+- Never do a broad inventory dump. Show 3-5 of the most relevant results and then ask a follow-up question to refine further.
+- If the customer asks a follow-up about the same category (e.g. "show me cheaper ones" or "what about in blue?"), search again within that same category — don't start over from the full catalogue.
+- Keep the conversation going. After every set of results ask something like "Would any of these work, or shall I narrow it down further?"
+
+ORDER & CHECKOUT:
+- When user says "add to cart" or "I'll take this", use the add_to_cart tool, then show the cart and ask "Ready to checkout?"
+- When they say yes / "checkout" / "place order": confirm their phone number first (see above), then call the checkout tool.
+- After checkout, ALWAYS present the full cost breakdown using the values returned by the checkout tool:
+  • Subtotal: $X.XX
+  • Shipping: $X.XX (free if subtotal > $50, otherwise $5.99)
+  • Tax (10%): $X.XX
+  • *Total: $X.XX*
+  Then share the payment link and order number. Never say you don't have the breakdown — you receive subtotal, tax, shipping, and total directly from the tool.
+
+GENERAL:
+- Be concise — WhatsApp messages should be short and easy to read.
+- Use plain text, avoid heavy markdown. A little bold (*word*) is fine.
+- If asked about store policies, FAQs, or product guides, use search_knowledge_base first.
 
 Available tools:
-- search_products: Find products by description. Input: search query (str).
-- filter_products: Filter by category/price. Input: JSON with category, min_price, max_price, search_query, limit.
-- get_product_details: Get details by product ID. Input: product ID (int as string).
-- get_recommendations: Get recommendations. Input: product ID or preference description.
-- add_to_cart: Add to cart. Input: JSON with product_id (int), quantity (int), session_id (str).
-- view_cart: View cart. Input: session_id (str).
-- clear_cart: Clear cart. Input: session_id (str).
-- checkout: Complete order. Input: JSON with session_id (str), customer_phone (str), shipping_address (optional JSON).
-"""
+- search_products: Semantic search across products. Input: search query (str).
+- filter_products: Filter by category/price/keyword. Input: JSON with category, min_price, max_price, search_query, limit.
+- get_product_details: Full details for one product. Input: product ID (int as string).
+- get_recommendations: Similar or related products. Input: product ID or preference description.
+- add_to_cart: Add item to cart. Input: JSON with product_id (int), quantity (int), session_id (str).
+- view_cart: Show current cart. Input: session_id (str).
+- clear_cart: Empty the cart. Input: session_id (str).
+- checkout: Place the order. Input: JSON with session_id (str), customer_phone (str), shipping_address (optional JSON).
+{kb_tool_line}"""
+
+            # --- Observability callbacks ---
+            token_cb = TokenCountCallback()
+            # --- End observability setup ---
 
             agent_input = {"input": f"{system_prompt}\n\nUser: {user_message}"}
-            result = await agent.acall(agent_input)
+            result = await agent.acall(agent_input, callbacks=[token_cb])
 
             ai_response = result.get("output", "I'm sorry, I couldn't process that.")
 
+            import re
             product_ids = []
+            tool_calls = []
+
             logger.info(f"[Chat] intermediate_steps present: {'intermediate_steps' in result}, count: {len(result.get('intermediate_steps', []))}")
-            if "intermediate_steps" in result:
-                import re
-                for step in result["intermediate_steps"]:
-                    observation = str(step[1])
-                    logger.info(f"[Chat] Scanning Observation: {observation[:200]}...")
-                    
-                    # Search for arrays of numbers in the observation string
-                    # Matches "product_ids": [1, 2, 3] or similar patterns
-                    matches = re.finditer(r'"product_ids":\s*\[(.*?)\]', observation)
-                    for match in matches:
-                        try:
-                            # Extract and split the IDs
-                            id_list_str = match.group(1)
-                            # Handle both comma-separated and space-separated lists just in case
-                            ids = [int(i.strip()) for i in id_list_str.split(',') if i.strip().isdigit()]
-                            product_ids.extend(ids)
-                        except Exception as e:
-                            logger.error(f"[Chat] Regex parse error: {e}")
+            for step in result.get("intermediate_steps", []):
+                action, observation = step
+                observation_str = str(observation)
+
+                logger.info(f"[Chat] Scanning Observation: {observation_str[:200]}...")
+
+                # Collect product IDs
+                for match in re.finditer(r'"product_ids":\s*\[(.*?)\]', observation_str):
+                    try:
+                        ids = [int(i.strip()) for i in match.group(1).split(',') if i.strip().isdigit()]
+                        product_ids.extend(ids)
+                    except Exception as e:
+                        logger.error(f"[Chat] Regex parse error: {e}")
+
+                # Persist tool call for admin dashboard
+                tool_calls.append({
+                    "tool": action.tool,
+                    "input": action.tool_input if isinstance(action.tool_input, str) else json.dumps(action.tool_input),
+                    "output": observation_str[:2000],
+                })
+
+            # Token counts from Gemini
+            token_counts = {
+                "prompt_tokens": token_cb.prompt_tokens,
+                "completion_tokens": token_cb.completion_tokens,
+                "total_tokens": token_cb.total_tokens,
+            }
 
             # Deduplicate and validate
             unique_ids = list(set(product_ids))
             logger.info(f"[Chat] Final unique IDs for query: {unique_ids}")
-            
-            msg_type = "product" if unique_ids else "text"
-            await add_message(str(conversation["_id"]), "assistant", ai_response, {"type": msg_type})
 
-            # Update conversation state
-            state = "cart" if "cart" in ai_response.lower() else "browsing"
+            msg_type = "product" if unique_ids else "text"
+            await add_message(
+                str(conversation["_id"]), "assistant", ai_response,
+                {
+                    "type": msg_type,
+                    "tool_calls": tool_calls,
+                    "token_counts": token_counts,
+                }
+            )
+
+            # Update conversation state — infer from tool calls first, then response text.
+            # Never downgrade a terminal state (ordered) via a low-signal follow-up message.
+            STATE_PRIORITY = {"greeting": 0, "browsing": 1, "cart": 2, "checkout": 3, "ordered": 4, "error": -1}
+            new_state = _infer_state(tool_calls, ai_response)
+            current_state = conversation.get("state", "greeting")
+            if STATE_PRIORITY.get(new_state, 0) >= STATE_PRIORITY.get(current_state, 0):
+                state = new_state
+            else:
+                state = current_state  # preserve higher-priority state
             await update_conversation_state(str(conversation["_id"]), state)
 
             # Build product list for response
