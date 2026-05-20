@@ -8,12 +8,13 @@ export async function POST(req: Request) {
   try {
     const { messages, data: requestData } = await req.json();
     const lastMessage = messages[messages.length - 1];
+    const kbSessionId: string | null = requestData?.kbSessionId ?? null;
 
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const baseUrl = process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
     const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
     const apiUrl = `${cleanBaseUrl}/api/v1/chat/`;
 
-    console.log(`[Chat Bridge] Target API: ${apiUrl}`);
+    console.log(`[Chat Bridge] Target API: ${apiUrl}, kb_session: ${kbSessionId ?? 'none'}`);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
         customer_phone: requestData?.phone || 'anonymous',
         session_id: requestData?.sessionId || 'default_session',
         source: 'web',
+        kb_session_id: kbSessionId,
       }),
       signal: controller.signal,
     });

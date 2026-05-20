@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U whatsell -d whatsell_db"]
       interval: 10s
@@ -83,6 +84,7 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://api:8000
+      - INTERNAL_API_URL=http://api:8000
     volumes:
       - ./frontend:/app
       - /app/node_modules

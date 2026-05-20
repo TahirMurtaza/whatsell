@@ -7,6 +7,7 @@ class ChatMessage(BaseModel):
     message: str
     session_id: Optional[str] = None
     source: str = Field(default="whatsapp")
+    kb_session_id: Optional[str] = None  # knowledge-base session to search against
 
 
 class ChatResponse(BaseModel):
