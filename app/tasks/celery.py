@@ -10,7 +10,7 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
     include=[
         "app.tasks.followups",
-        "app.tasks.embeddings",
+        "app.tasks.documents",
     ],
 )
 
@@ -23,12 +23,6 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    beat_schedule={
-        "embed-missing-products-every-2-minutes": {
-            "task": "app.tasks.embeddings.embed_missing_products",
-            "schedule": 120.0,  # every 2 minutes
-            "kwargs": {"batch_size": 100},
-        },
-    },
+    beat_schedule={},
 )
 
