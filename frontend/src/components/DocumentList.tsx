@@ -57,11 +57,9 @@ export default function DocumentList({ sessionId, refreshTrigger, onCountChange 
       await fetch(`/api/documents/${docId}?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
       });
-      setDocs((prev) => {
-        const next = prev.filter((d) => d.id !== docId);
-        onCountChange?.(next.filter((d) => d.status === 'ready').length);
-        return next;
-      });
+      // Remove from local state first for instant feedback, then re-fetch to sync count
+      setDocs((prev) => prev.filter((d) => d.id !== docId));
+      await fetchDocs();
     } finally {
       setDeleting(null);
     }
