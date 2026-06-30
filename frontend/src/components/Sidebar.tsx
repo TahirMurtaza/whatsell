@@ -5,17 +5,14 @@ import { usePathname } from 'next/navigation';
 import {
   Sparkles,
   MessageSquare,
-  LayoutDashboard,
   ScrollText,
   BookOpen,
   ShoppingBag,
   Settings,
-  Users,
 } from 'lucide-react';
 
 const NAV = [
   { href: '/',        icon: MessageSquare,  label: 'Live Chat'  },
-  { href: '/admin',   icon: LayoutDashboard, label: 'Dashboard' },
   { href: '/logs',    icon: ScrollText,     label: 'Sessions'   },
   { href: '/products',icon: ShoppingBag,    label: 'Products'   },
   { href: '/kb',      icon: BookOpen,       label: 'Knowledge'  },
@@ -27,7 +24,6 @@ export default function Sidebar() {
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/';
-    if (href === '/admin') return pathname === '/admin';
     return pathname.startsWith(href);
   };
 
