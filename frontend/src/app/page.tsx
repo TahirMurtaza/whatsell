@@ -2,7 +2,8 @@
 
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useChat } from 'ai/react';
-import { Send, ShoppingBag, Sparkles, BookOpen, LayoutDashboard, ScrollText } from 'lucide-react';
+import { Send, ShoppingBag, Sparkles, X, ShoppingCart, Check } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import Link from 'next/link';
 import MessageItem from '@/components/MessageItem';
 
@@ -33,6 +34,10 @@ export default function ChatPage() {
 
   // KB session ID from localStorage (set by /kb page)
   const [kbSessionId, setKbSessionId] = React.useState<string | null>(null);
+
+  // Quick view product
+  const [quickViewProduct, setQuickViewProduct] = React.useState<any | null>(null);
+  const [qvAdded, setQvAdded] = React.useState(false);
 
   // Stable web session ID — persists for the browser tab (sessionStorage),
   // so each new tab/window starts a fresh conversation in the logs.
@@ -91,6 +96,18 @@ export default function ChatPage() {
     [sessionId, refreshCartCount]
   );
 
+  const handleQuickView = useCallback((product: any) => {
+    setQuickViewProduct(product);
+    setQvAdded(false);
+  }, []);
+
+  const handleQvAddToCart = useCallback(async () => {
+    if (!quickViewProduct) return;
+    await handleAddToCart(quickViewProduct);
+    setQvAdded(true);
+    setTimeout(() => setQvAdded(false), 2000);
+  }, [quickViewProduct, handleAddToCart]);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current) {
@@ -109,15 +126,6 @@ export default function ChatPage() {
           <h1>WhatSell <span className="gradient-text">AI</span></h1>
         </div>
         <div className="header-actions">
-          <Link href="/admin" className="kb-link" title="Admin Dashboard">
-            <LayoutDashboard size={20} />
-          </Link>
-          <Link href="/logs" className="kb-link" title="Session Logs">
-            <ScrollText size={20} />
-          </Link>
-          <Link href="/kb" className="kb-link" title="Knowledge Base">
-            <BookOpen size={20} />
-          </Link>
           <div className="cart-status">
             <ShoppingBag size={20} />
             {cartCount > 0 && <span className="badge">{cartCount}</span>}
@@ -138,6 +146,7 @@ export default function ChatPage() {
                 message={m}
                 products={m.role === 'assistant' ? messageProducts : undefined}
                 onAddToCart={handleAddToCart}
+                onQuickView={handleQuickView}
               />
             );
           })}
@@ -180,6 +189,97 @@ export default function ChatPage() {
           ))}
         </div>
       </footer>
+
+      <AnimatePresence>
+        {quickViewProduct && (
+          <motion.div
+            className="qv-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setQuickViewProduct(null)}
+          >
+            <motion.div
+              className="qv-modal glass premium-shadow"
+              initial={{ opacity: 0, scale: 0.92, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 20 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button className="qv-close" onClick={() => setQuickViewProduct(null)}>
+                <X size={18} />
+              </button>
+
+              <div className="qv-image">
+                <img
+                  src={quickViewProduct.image_urls?.[0] || 'https://placehold.co/400x300/1a1a2e/c084fc?text=Product'}
+                  alt={quickViewProduct.name}
+                />
+                {quickViewProduct.category && (
+                  <span className="qv-category">{quickViewProduct.category}</span>
+                )}
+              </div>
+
+              <div className="qv-details">
+                <h3 className="qv-name">{quickViewProduct.name}</h3>
+
+                <div className="qv-price-row">
+                  <span className="qv-price">
+                    ${quickViewProduct.price?.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                  {quickViewProduct.compare_at_price && quickViewProduct.compare_at_price > quickViewProduct.price && (
+                    <>
+                      <span className="qv-compare">
+                        ${quickViewProduct.compare_at_price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                      </span>
+                      <span className="qv-discount">
+                        -{Math.round(((quickViewProduct.compare_at_price - quickViewProduct.price) / quickViewProduct.compare_at_price) * 100)}%
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {quickViewProduct.sku && (
+                  <p className="qv-sku">SKU: {quickViewProduct.sku}</p>
+                )}
+
+                <div className="qv-desc">
+                  <h4>Description</h4>
+                  <p>{quickViewProduct.description || 'No description available for this product.'}</p>
+                </div>
+
+                {quickViewProduct.tags && quickViewProduct.tags.length > 0 && (
+                  <div className="qv-tags">
+                    {quickViewProduct.tags.map((tag: string) => (
+                      <span key={tag} className="qv-tag">{tag}</span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="qv-stock-row">
+                  {(quickViewProduct.stock_quantity ?? 999) === 0 ? (
+                    <span className="qv-stock out">Out of stock</span>
+                  ) : (quickViewProduct.stock_quantity ?? 999) <= 5 ? (
+                    <span className="qv-stock low">Only {quickViewProduct.stock_quantity} left</span>
+                  ) : (
+                    <span className="qv-stock in">In stock</span>
+                  )}
+                </div>
+
+                <button
+                  className={`qv-add-btn ${qvAdded ? 'added' : ''}`}
+                  onClick={handleQvAddToCart}
+                  disabled={(quickViewProduct.stock_quantity ?? 999) === 0}
+                >
+                  <ShoppingCart size={18} />
+                  {qvAdded ? 'Added to Cart!' : 'Add to Cart'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <style jsx>{`
         .chat-layout {
@@ -342,6 +442,189 @@ export default function ChatPage() {
         @keyframes bounce {
           0%, 80%, 100% { transform: scale(0); }
           40% { transform: scale(1.0); }
+        }
+        .qv-overlay {
+          position: fixed;
+          inset: 0;
+          z-index: 1000;
+          background: rgba(0, 0, 0, 0.65);
+          backdrop-filter: blur(4px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+        }
+        .qv-modal {
+          position: relative;
+          width: 100%;
+          max-width: 520px;
+          max-height: 85vh;
+          overflow-y: auto;
+          border-radius: 20px;
+          background: #16161a;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .qv-close {
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          z-index: 10;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          border: none;
+          background: rgba(0, 0, 0, 0.5);
+          backdrop-filter: blur(8px);
+          color: white;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: background 0.2s;
+        }
+        .qv-close:hover {
+          background: var(--error);
+        }
+        .qv-image {
+          height: 300px;
+          position: relative;
+          overflow: hidden;
+          background: #0f0f13;
+        }
+        .qv-image img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+        .qv-category {
+          position: absolute;
+          top: 12px;
+          left: 12px;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          background: var(--primary);
+          padding: 4px 12px;
+          border-radius: 16px;
+          color: white;
+        }
+        .qv-details {
+          padding: 24px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .qv-name {
+          font-size: 20px;
+          font-weight: 700;
+          color: #fff;
+          line-height: 1.3;
+        }
+        .qv-price-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .qv-price {
+          font-size: 24px;
+          font-weight: 800;
+          color: var(--accent);
+        }
+        .qv-compare {
+          font-size: 16px;
+          color: rgba(255, 255, 255, 0.35);
+          text-decoration: line-through;
+        }
+        .qv-discount {
+          font-size: 12px;
+          font-weight: 700;
+          background: var(--error);
+          color: white;
+          padding: 3px 8px;
+          border-radius: 10px;
+        }
+        .qv-sku {
+          font-size: 13px;
+          color: rgba(255, 255, 255, 0.4);
+        }
+        .qv-desc h4 {
+          font-size: 13px;
+          font-weight: 600;
+          color: rgba(255, 255, 255, 0.6);
+          margin-bottom: 4px;
+        }
+        .qv-desc p {
+          font-size: 14px;
+          color: rgba(255, 255, 255, 0.5);
+          line-height: 1.6;
+        }
+        .qv-tags {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+        .qv-tag {
+          font-size: 11px;
+          font-weight: 600;
+          padding: 4px 10px;
+          border-radius: 12px;
+          background: rgba(139, 92, 246, 0.12);
+          color: var(--accent);
+          border: 1px solid rgba(139, 92, 246, 0.25);
+        }
+        .qv-stock-row {
+          margin-top: 2px;
+        }
+        .qv-stock {
+          font-size: 12px;
+          font-weight: 600;
+          padding: 4px 12px;
+          border-radius: 12px;
+        }
+        .qv-stock.in {
+          background: rgba(16, 185, 129, 0.12);
+          color: var(--success);
+          border: 1px solid rgba(16, 185, 129, 0.25);
+        }
+        .qv-stock.low {
+          background: rgba(245, 158, 11, 0.12);
+          color: #f59e0b;
+          border: 1px solid rgba(245, 158, 11, 0.25);
+        }
+        .qv-stock.out {
+          background: rgba(239, 68, 68, 0.12);
+          color: var(--error);
+          border: 1px solid rgba(239, 68, 68, 0.25);
+        }
+        .qv-add-btn {
+          margin-top: auto;
+          background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
+          color: white;
+          border: none;
+          padding: 14px;
+          border-radius: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 10px;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s;
+        }
+        .qv-add-btn.added {
+          background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+        }
+        .qv-add-btn:hover:not(:disabled) {
+          box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4);
+          transform: translateY(-2px);
+        }
+        .qv-add-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+          transform: none;
+          box-shadow: none;
         }
       `}</style>
     </main>

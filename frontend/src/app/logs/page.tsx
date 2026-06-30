@@ -5,7 +5,6 @@ import {
   ChevronLeft, ChevronRight, Search, X,
   MessageCircle, AlertCircle,
 } from 'lucide-react';
-import Link from 'next/link';
 import SessionDrawer from '@/components/logs/SessionDrawer';
 
 /* ─── Types ─────────────────────────────────────────────────────────────── */
@@ -247,13 +246,6 @@ export default function LogsPage() {
             <Download size={13} />
             Export All
           </button>
-          <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.1)' }} />
-          <Link href="/admin" style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}>
-            ← Dashboard
-          </Link>
-          <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}>
-            ← Chat
-          </Link>
         </header>
 
         {/* ── Tabs ── */}

@@ -1,7 +1,7 @@
 'use client';
+
 import { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, RefreshCw } from 'lucide-react';
-import Link from 'next/link';
+import { RefreshCw } from 'lucide-react';
 import SessionList from '@/components/admin/SessionList';
 import ConversationViewer from '@/components/admin/ConversationViewer';
 import TokenUsageTab from '@/components/admin/TokenUsageTab';
@@ -27,7 +27,6 @@ export default function AdminPage() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Load sessions list
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
     try {
@@ -44,7 +43,6 @@ export default function AdminPage() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
-  // Load session detail when selected
   const handleSelectSession = useCallback(async (sessionId: string) => {
     setSelectedSession(sessionId);
     setActiveTab('conversation');
@@ -61,7 +59,6 @@ export default function AdminPage() {
     }
   }, []);
 
-  // Load analytics lazily when Analytics tab is opened
   useEffect(() => {
     if (activeTab === 'analytics' && !analytics && !analyticsLoading) {
       setAnalyticsLoading(true);
@@ -79,84 +76,28 @@ export default function AdminPage() {
   };
 
   return (
-    <>
-      <style>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: var(--bg, #0f0f13); color: #fff; font-family: system-ui, sans-serif; }
-        :root {
-          --bg: #0f0f13;
-          --card-bg: rgba(255,255,255,0.04);
-          --primary: #7c3aed;
-          --accent: #6366f1;
-          --sidebar-w: 300px;
-        }
-        .tab-btn {
-          background: transparent; border: none; cursor: pointer; color: rgba(255,255,255,0.5);
-          padding: 8px 14px; font-size: 13px; border-bottom: 2px solid transparent;
-          transition: color 0.15s, border-color 0.15s; white-space: nowrap;
-        }
-        .tab-btn.active { color: #fff; border-bottom-color: var(--primary); }
-        .tab-btn:hover:not(.active) { color: rgba(255,255,255,0.8); }
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
-      `}</style>
-
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: 'var(--bg)' }}>
-        {/* Header */}
-        <header style={{
-          display: 'flex', alignItems: 'center', gap: 12, padding: '0 20px',
-          height: 52, borderBottom: '1px solid rgba(255,255,255,0.08)',
-          background: 'rgba(255,255,255,0.02)', flexShrink: 0,
-        }}>
-          <LayoutDashboard size={18} style={{ color: 'var(--primary)' }} />
-          <span style={{ fontWeight: 700, fontSize: 15 }}>Admin Dashboard</span>
-          <div style={{ flex: 1 }} />
-          <Link href="/logs" style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}>
-            Logs
-          </Link>
-          <Link href="/" style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}>
-            ← Chat
-          </Link>
-        </header>
-
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-          {/* Sidebar */}
-          <aside style={{
-            width: 'var(--sidebar-w)', flexShrink: 0,
-            borderRight: '1px solid rgba(255,255,255,0.08)',
-            display: 'flex', flexDirection: 'column', overflow: 'hidden',
-          }}>
-            {/* Search + refresh */}
-            <div style={{
-              padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)',
-              display: 'flex', gap: 8,
-            }}>
+    <div className="admin-layout">
+      <div className="admin-content">
+        <div className="content-grid">
+          {/* Sessions Sidebar */}
+          <div className="sessions-panel">
+            <div className="panel-header">
+              <h3>Sessions</h3>
+              <button onClick={loadSessions} className="refresh-btn" title="Refresh">
+                <RefreshCw size={14} style={sessionsLoading ? { animation: 'spin 1s linear infinite' } : {}} />
+              </button>
+            </div>
+            <div className="search-box">
               <input
-                placeholder="Search by phone…"
+                placeholder="Search by phone..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && loadSessions()}
-                style={{
-                  flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 7, padding: '6px 10px', fontSize: 12, color: '#fff', outline: 'none',
-                }}
               />
-              <button
-                onClick={loadSessions}
-                style={{
-                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 7, padding: '6px 8px', cursor: 'pointer', color: '#fff',
-                  display: 'flex', alignItems: 'center',
-                }}
-              >
-                <RefreshCw size={13} style={sessionsLoading ? { animation: 'spin 1s linear infinite' } : {}} />
-              </button>
             </div>
-
-            <div style={{ overflowY: 'auto', flex: 1 }}>
+            <div className="sessions-list">
               {sessionsLoading ? (
-                <p style={{ padding: '20px 16px', color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>Loading…</p>
+                <p className="empty-state">Loading...</p>
               ) : (
                 <SessionList
                   sessions={sessions}
@@ -165,49 +106,28 @@ export default function AdminPage() {
                 />
               )}
             </div>
-          </aside>
+          </div>
 
-          {/* Main panel */}
-          <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Main Panel */}
+          <div className="main-panel">
             {!selectedSession ? (
-              <div style={{
-                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: 'rgba(255,255,255,0.2)', fontSize: 15,
-              }}>
-                Select a session to inspect
+              <div className="empty-state">
+                <p>Select a session to inspect</p>
               </div>
             ) : (
               <>
-                {/* Session header */}
                 {sessionDetail && (
-                  <div style={{
-                    padding: '10px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)',
-                    display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0,
-                    background: 'rgba(255,255,255,0.01)',
-                  }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>
-                      {sessionDetail.conversation.customer_phone || 'Unknown'}
-                    </span>
-                    <span style={{ fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>
-                      {sessionDetail.conversation.session_id}
-                    </span>
-                    <span style={{
-                      fontSize: 11, padding: '2px 8px', borderRadius: 4,
-                      background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.4)',
-                    }}>
-                      {sessionDetail.conversation.state}
-                    </span>
-                    <span style={{ marginLeft: 'auto', fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>
+                  <div className="session-header">
+                    <span className="session-phone">{sessionDetail.conversation.customer_phone || 'Unknown'}</span>
+                    <span className="session-id">{sessionDetail.conversation.session_id}</span>
+                    <span className="session-state">{sessionDetail.conversation.state}</span>
+                    <span className="session-stats">
                       {stats.message_count} messages · {stats.total_tokens.toLocaleString()} tokens
                     </span>
                   </div>
                 )}
 
-                {/* Tabs */}
-                <div style={{
-                  display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.08)',
-                  paddingLeft: 8, flexShrink: 0, overflowX: 'auto',
-                }}>
+                <div className="tabs-bar">
                   {TABS.map(t => (
                     <button
                       key={t.id}
@@ -219,10 +139,9 @@ export default function AdminPage() {
                   ))}
                 </div>
 
-                {/* Tab content */}
-                <div style={{ flex: 1, overflowY: 'auto' }}>
+                <div className="tab-content">
                   {detailLoading ? (
-                    <p style={{ padding: '24px', color: 'rgba(255,255,255,0.3)', fontSize: 14 }}>Loading session…</p>
+                    <p className="empty-state">Loading session...</p>
                   ) : (
                     <>
                       {activeTab === 'conversation' && <ConversationViewer messages={messages} />}
@@ -236,13 +155,159 @@ export default function AdminPage() {
                 </div>
               </>
             )}
-          </main>
+          </div>
         </div>
       </div>
 
-      <style>{`
-        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+      <style jsx>{`
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        .admin-layout {
+          display: flex;
+          height: 100vh;
+          background: #0f0f13;
+          overflow: hidden;
+        }
+        .admin-content {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .content-grid {
+          display: flex;
+          flex: 1;
+          overflow: hidden;
+        }
+        .sessions-panel {
+          width: 300px;
+          border-right: 1px solid rgba(255, 255, 255, 0.06);
+          display: flex;
+          flex-direction: column;
+          flex-shrink: 0;
+          background: rgba(255, 255, 255, 0.01);
+        }
+        .panel-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 12px 16px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .panel-header h3 {
+          font-size: 14px;
+          font-weight: 600;
+        }
+        .refresh-btn {
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 6px;
+          padding: 5px;
+          cursor: pointer;
+          color: rgba(255, 255, 255, 0.5);
+          display: flex;
+          align-items: center;
+        }
+        .refresh-btn:hover {
+          color: #fff;
+          background: rgba(255, 255, 255, 0.1);
+        }
+        .search-box {
+          padding: 8px 12px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+        }
+        .search-box input {
+          width: 100%;
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 6px;
+          padding: 6px 10px;
+          font-size: 12px;
+          color: #fff;
+          outline: none;
+        }
+        .sessions-list {
+          flex: 1;
+          overflow-y: auto;
+        }
+        .main-panel {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .session-header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 10px 20px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          background: rgba(255, 255, 255, 0.01);
+          flex-shrink: 0;
+        }
+        .session-phone {
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .session-id {
+          font-size: 12px;
+          color: rgba(255, 255, 255, 0.35);
+        }
+        .session-state {
+          font-size: 11px;
+          padding: 2px 8px;
+          border-radius: 4px;
+          background: rgba(255, 255, 255, 0.07);
+          color: rgba(255, 255, 255, 0.4);
+        }
+        .session-stats {
+          margin-left: auto;
+          font-size: 12px;
+          color: rgba(255, 255, 255, 0.35);
+        }
+        .tabs-bar {
+          display: flex;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+          padding-left: 8px;
+          flex-shrink: 0;
+          overflow-x: auto;
+        }
+        .tab-btn {
+          background: transparent;
+          border: none;
+          cursor: pointer;
+          color: rgba(255, 255, 255, 0.4);
+          padding: 10px 14px;
+          font-size: 13px;
+          border-bottom: 2px solid transparent;
+          transition: color 0.15s, border-color 0.15s;
+          white-space: nowrap;
+        }
+        .tab-btn.active {
+          color: #fff;
+          border-bottom-color: var(--primary);
+        }
+        .tab-btn:hover:not(.active) {
+          color: rgba(255, 255, 255, 0.7);
+        }
+        .tab-content {
+          flex: 1;
+          overflow-y: auto;
+          padding: 0;
+        }
+        .empty-state {
+          flex: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: rgba(255, 255, 255, 0.2);
+          font-size: 14px;
+        }
+
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
       `}</style>
-    </>
+    </div>
   );
 }
