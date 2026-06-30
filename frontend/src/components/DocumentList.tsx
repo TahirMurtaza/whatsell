@@ -13,7 +13,8 @@ interface Doc {
 
 interface DocumentListProps {
   sessionId: string;
-  refreshTrigger: number; // increment to force refresh
+  refreshTrigger: number;
+  onCountChange?: (count: number) => void;
 }
 
 const STATUS_META: Record<string, { label: string; color: string; Icon: React.FC<any> }> = {
@@ -23,7 +24,7 @@ const STATUS_META: Record<string, { label: string; color: string; Icon: React.FC
   error:      { label: 'Error',      color: '#ef4444', Icon: XCircle },
 };
 
-export default function DocumentList({ sessionId, refreshTrigger }: DocumentListProps) {
+export default function DocumentList({ sessionId, refreshTrigger, onCountChange }: DocumentListProps) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [deleting, setDeleting] = useState<number | null>(null);
 
@@ -32,12 +33,14 @@ export default function DocumentList({ sessionId, refreshTrigger }: DocumentList
       const res = await fetch(`/api/documents/?session_id=${encodeURIComponent(sessionId)}`);
       if (res.ok) {
         const data = await res.json();
-        setDocs(data.documents || []);
+        const fetched = data.documents || [];
+        setDocs(fetched);
+        onCountChange?.(fetched.filter((d: Doc) => d.status === 'ready').length);
       }
     } catch {
       // silently ignore
     }
-  }, [sessionId]);
+  }, [sessionId, onCountChange]);
 
   // Auto-poll while any doc is still processing/pending
   useEffect(() => {
@@ -54,7 +57,11 @@ export default function DocumentList({ sessionId, refreshTrigger }: DocumentList
       await fetch(`/api/documents/${docId}?session_id=${encodeURIComponent(sessionId)}`, {
         method: 'DELETE',
       });
-      setDocs((prev) => prev.filter((d) => d.id !== docId));
+      setDocs((prev) => {
+        const next = prev.filter((d) => d.id !== docId);
+        onCountChange?.(next.filter((d) => d.status === 'ready').length);
+        return next;
+      });
     } finally {
       setDeleting(null);
     }
