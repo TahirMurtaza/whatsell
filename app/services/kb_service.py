@@ -97,15 +97,24 @@ def _chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> List[str
 # ---------------------------------------------------------------------------
 
 def _embed_texts_sync(texts: List[str]) -> List[List[float]]:
-    """Call Gemini embedding API synchronously (safe in Celery worker threads).
-    Note: models/gemini-embedding-001 returns 3072-dimensional vectors."""
+    """Embed texts one-at-a-time using EmbedContent RPC (not BatchEmbedContents).
+    Passing a list to embed_content triggers BatchEmbedContents which has a hard
+    60-second gRPC deadline and times out on large PDFs. Single-string calls each
+    get their own 60-second budget and are immune to batch size issues."""
+    import time
     genai.configure(api_key=settings.gemini_api_key)
-    result = genai.embed_content(
-        model="models/gemini-embedding-001",
-        content=texts,
-        task_type="retrieval_document",
-    )
-    return result["embedding"]
+    embeddings = []
+    for i, text in enumerate(texts):
+        result = genai.embed_content(
+            model="models/gemini-embedding-001",
+            content=text,
+            task_type="retrieval_document",
+        )
+        embeddings.append(result["embedding"])
+        # Brief pause every 10 calls to stay within Gemini rate limits
+        if i > 0 and i % 10 == 0:
+            time.sleep(0.5)
+    return embeddings
 
 
 def _embed_query_sync(query: str) -> List[float]:
@@ -150,8 +159,9 @@ def process_document_sync(document_id: int, raw_bytes: bytes, content_type: str)
 
             logger.info(f"[KB] Doc {document_id}: {len(chunks)} chunks, embedding now…")
 
-            # 3. Embed in batches of 20 (stay well within Gemini rate limits)
-            BATCH = 20
+            # 3. Embed in batches of 10 — each text is embedded individually
+            # inside _embed_texts_sync to avoid gRPC BatchEmbedContents timeout
+            BATCH = 10
             all_embeddings: List[List[float]] = []
             for i in range(0, len(chunks), BATCH):
                 batch = chunks[i : i + BATCH]
@@ -174,8 +184,9 @@ def process_document_sync(document_id: int, raw_bytes: bytes, content_type: str)
         except Exception as exc:
             logger.error(f"[KB] Doc {document_id} processing failed: {exc}", exc_info=True)
             doc.status = "error"
-            doc.error_msg = str(exc)
+            doc.error_msg = str(exc)[:500]
             db.commit()
+            raise  # re-raise so Celery can retry the task
 
 
 # ---------------------------------------------------------------------------
